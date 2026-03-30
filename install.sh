@@ -42,13 +42,23 @@ import json, os
 p = os.path.expanduser('~/.claude/settings.json')
 with open(p) as f:
     s = json.load(f)
+
+# 写入环境变量
 s.setdefault('env', {})
 s['env']['DINGTALK_WEBHOOK'] = '$WEBHOOK'
 if '$SECRET':
     s['env']['DINGTALK_SECRET'] = '$SECRET'
-s.setdefault('hooks', {}).setdefault('Stop', [{'hooks': []}])['Stop'][0]['hooks'] = [
-    {'type': 'command', 'command': 'python3 ~/.claude/hooks/dingtalk_notify.py', 'async': True}
-]
+
+# 追加 Stop hook（不覆盖已有 hooks）
+new_hook = {'type': 'command', 'command': 'python3 ~/.claude/hooks/dingtalk_notify.py', 'async': True}
+stop_list = s.setdefault('hooks', {}).setdefault('Stop', [])
+if not stop_list:
+    stop_list.append({'hooks': []})
+hooks_arr = stop_list[0].setdefault('hooks', [])
+already = any(h.get('command', '').endswith('dingtalk_notify.py') for h in hooks_arr)
+if not already:
+    hooks_arr.append(new_hook)
+
 with open(p, 'w') as f:
     json.dump(s, f, indent=2, ensure_ascii=False)
 print('settings.json 已更新')

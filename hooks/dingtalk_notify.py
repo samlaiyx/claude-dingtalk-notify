@@ -146,7 +146,9 @@ def sign_webhook(webhook: str, secret: str) -> str:
 
 def send_notification(webhook: str, payload: dict) -> bool:
     """使用 urllib.request 发送 POST 请求到钉钉 Webhook。"""
-    try:
+    import ssl
+
+    def _do_request(ctx=None):
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
             webhook,
@@ -154,15 +156,30 @@ def send_notification(webhook: str, payload: dict) -> bool:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        kwargs = {"timeout": 10}
+        if ctx is not None:
+            kwargs["context"] = ctx
+        with urllib.request.urlopen(req, **kwargs) as resp:
             body = resp.read().decode("utf-8")
-            result = json.loads(body)
-            if result.get("errcode") == 0:
-                print("[dingtalk_notify] 发送成功")
-                return True
-            else:
-                print(f"[dingtalk_notify] 发送失败: {result}")
-                return False
+            return json.loads(body)
+
+    try:
+        try:
+            result = _do_request()
+        except Exception as ssl_err:
+            if "CERTIFICATE_VERIFY_FAILED" not in str(ssl_err) and not isinstance(ssl_err, ssl.SSLError):
+                raise
+            # Mac 系统 Python 未安装根证书时降级跳过验证
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            result = _do_request(ctx)
+        if result.get("errcode") == 0:
+            print("[dingtalk_notify] 发送成功")
+            return True
+        else:
+            print(f"[dingtalk_notify] 发送失败: {result}")
+            return False
     except Exception as e:
         print(f"[dingtalk_notify] 请求异常: {e}")
         return False
