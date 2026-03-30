@@ -42,7 +42,7 @@
 ### Mac / Linux（推荐）
 
 ```bash
-git clone https://github.com/你的用户名/claude-dingtalk-notify.git
+git clone https://github.com/samlaiyx/claude-dingtalk-notify.git
 cd claude-dingtalk-notify
 bash install.sh
 ```
@@ -52,7 +52,7 @@ bash install.sh
 ### Windows
 
 ```bat
-git clone https://github.com/你的用户名/claude-dingtalk-notify.git
+git clone https://github.com/samlaiyx/claude-dingtalk-notify.git
 cd claude-dingtalk-notify
 install.bat
 ```
