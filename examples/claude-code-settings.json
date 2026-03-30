@@ -1,0 +1,19 @@
+{
+  "env": {
+    "DINGTALK_WEBHOOK": "https://oapi.dingtalk.com/robot/send?access_token=你的token",
+    "DINGTALK_SECRET": "SEC你的加签密钥（可选）"
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/dingtalk_notify.py",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
