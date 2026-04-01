@@ -2,6 +2,21 @@
 
 > Claude Code / Codex CLI 对话结束后，自动发送钉钉通知。纯 Python 标准库，零依赖。
 
+## Latest Update
+
+`2026-04-01`
+
+- 新增 `Codex CLI notify` 兼容
+- 修复 Codex 中文摘要异常 / 空白 / 看起来像乱码的问题
+- README 重写为 `Claude Code` / `Codex CLI` 双通道说明
+
+**本次兼容的关键节点**
+
+- `Claude Code` 的通知数据来自 `stdin`
+- `Codex CLI` 的通知数据来自通知命令参数 `argv[1]`
+- 脚本现在同时兼容 `stdin` 和 `argv[1]`
+- 已兼容 Codex 实际字段名：`last-assistant-message`
+
 ![效果示例](docs/screenshot.png)
 
 ---
