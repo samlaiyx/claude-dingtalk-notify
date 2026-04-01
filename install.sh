@@ -6,19 +6,25 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${GREEN}=== Claude 钉钉通知 Hook 安装器 ===${NC}"
+echo -e "${GREEN}=== Claude Code / Codex CLI 钉钉通知安装器 ===${NC}"
 echo ""
 
 # 1. 创建目录
 HOOKS_DIR="$HOME/.claude/hooks"
+CODEX_NOTIFY_DIR="$HOME/.codex/notify"
 mkdir -p "$HOOKS_DIR"
+mkdir -p "$CODEX_NOTIFY_DIR"
 echo -e "${GREEN}✓${NC} 目录已就绪：$HOOKS_DIR"
+echo -e "${GREEN}✓${NC} 目录已就绪：$CODEX_NOTIFY_DIR"
 
 # 2. 复制脚本
 SCRIPT_SRC="$(dirname "$0")/hooks/dingtalk_notify.py"
 cp "$SCRIPT_SRC" "$HOOKS_DIR/dingtalk_notify.py"
 chmod +x "$HOOKS_DIR/dingtalk_notify.py"
+cp "$SCRIPT_SRC" "$CODEX_NOTIFY_DIR/dingtalk_notify.py"
+chmod +x "$CODEX_NOTIFY_DIR/dingtalk_notify.py"
 echo -e "${GREEN}✓${NC} 脚本已安装：$HOOKS_DIR/dingtalk_notify.py"
+echo -e "${GREEN}✓${NC} 脚本已安装：$CODEX_NOTIFY_DIR/dingtalk_notify.py"
 
 # 3. 获取 Webhook
 echo ""
@@ -67,7 +73,10 @@ PYEOF
 echo ""
 echo -e "${GREEN}=== 安装完成！===${NC}"
 echo ""
-echo "测试命令："
+echo "Claude Code 测试命令："
 echo "  echo '{\"session_id\":\"test\",\"stop_hook_active\":false,\"transcript_path\":\"\",\"last_assistant_message\":\"测试消息\",\"cwd\":\"$PWD\",\"permission_mode\":\"default\"}' | python3 ~/.claude/hooks/dingtalk_notify.py"
 echo ""
-echo -e "${YELLOW}重启 Claude Code 后 Hook 生效。${NC}"
+echo "Codex CLI 配置片段（追加到 ~/.codex/config.toml）："
+echo '  notify = ["python3", "'"$HOME"'/.codex/notify/dingtalk_notify.py"]'
+echo ""
+echo -e "${YELLOW}重启 Claude Code / Codex CLI 后配置生效。${NC}"

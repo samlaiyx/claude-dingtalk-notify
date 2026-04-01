@@ -1,0 +1,12 @@
+notify = ["python3", "/Users/yourname/.codex/notify/dingtalk_notify.py"]
+
+# Windows 示例：
+# notify = [
+#   "C:\\Users\\yourname\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+#   "C:\\Users\\yourname\\.codex\\notify\\dingtalk_notify.py",
+# ]
+
+# 可选：如果希望 Codex 子进程继承当前 shell 的环境变量，可以保留默认设置。
+# 请确保启动 Codex CLI 的环境里已经存在以下变量：
+# DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=your-token
+# DINGTALK_SECRET=SECyour-secret

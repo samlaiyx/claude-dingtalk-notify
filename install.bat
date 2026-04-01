@@ -1,16 +1,21 @@
 @echo off
 chcp 65001 >nul
-echo === Claude 钉钉通知 Hook 安装器 (Windows) ===
+echo === Claude Code / Codex CLI 钉钉通知安装器 (Windows) ===
 echo.
 
 set HOOKS_DIR=%USERPROFILE%\.claude\hooks
+set CODEX_NOTIFY_DIR=%USERPROFILE%\.codex\notify
 set SETTINGS=%USERPROFILE%\.claude\settings.json
 
 if not exist "%HOOKS_DIR%" mkdir "%HOOKS_DIR%"
+if not exist "%CODEX_NOTIFY_DIR%" mkdir "%CODEX_NOTIFY_DIR%"
 echo [OK] 目录已就绪：%HOOKS_DIR%
+echo [OK] 目录已就绪：%CODEX_NOTIFY_DIR%
 
 copy /Y "%~dp0hooks\dingtalk_notify.py" "%HOOKS_DIR%\dingtalk_notify.py" >nul
+copy /Y "%~dp0hooks\dingtalk_notify.py" "%CODEX_NOTIFY_DIR%\dingtalk_notify.py" >nul
 echo [OK] 脚本已安装：%HOOKS_DIR%\dingtalk_notify.py
+echo [OK] 脚本已安装：%CODEX_NOTIFY_DIR%\dingtalk_notify.py
 
 echo.
 echo 接下来请手动完成配置：
@@ -24,8 +29,10 @@ echo    "DINGTALK_SECRET": "SEC你的加签密钥（可选）"
 echo.
 echo 3. 在 "hooks" 段中添加 Stop hook（见 examples\claude-code-settings.json）
 echo.
-echo 4. 测试命令（在 PowerShell 中运行）：
+echo 4. 在 "%USERPROFILE%\.codex\config.toml" 中添加 notify（见 examples\codex-config.toml）
+echo.
+echo 5. Claude Code 测试命令（在 PowerShell 中运行）：
 echo    echo {"session_id":"test","stop_hook_active":false,"transcript_path":"","last_assistant_message":"测试","cwd":"C:\test","permission_mode":"default"} | python %HOOKS_DIR%\dingtalk_notify.py
 echo.
-echo [完成] 重启 Claude Code 后 Hook 生效。
+echo [完成] 重启 Claude Code / Codex CLI 后配置生效。
 pause

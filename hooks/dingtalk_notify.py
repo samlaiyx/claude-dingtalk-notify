@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Claude Code Stop hook — 钉钉通知脚本
+"""Claude Code / Codex CLI 通知脚本
 
-从 stdin 读取 Stop hook JSON，发送钉钉 Markdown 消息。
+从 stdin 读取 Claude Code Stop hook 或 Codex CLI notify JSON，发送钉钉 Markdown 消息。
 依赖：纯 Python 标准库，无需第三方包。
 
 环境变量：
@@ -20,6 +20,21 @@ import urllib.request
 from datetime import datetime
 
 
+def get_value(data: dict, key: str):
+    """兼容下划线和连字符字段名。"""
+    if not isinstance(data, dict):
+        return None
+    if key in data:
+        return data[key]
+    alt_key = key.replace("_", "-")
+    if alt_key in data:
+        return data[alt_key]
+    alt_key = key.replace("-", "_")
+    if alt_key in data:
+        return data[alt_key]
+    return None
+
+
 def read_stdin_json() -> dict:
     """读取并解析 stdin 传入的 hook JSON。"""
     try:
@@ -31,6 +46,17 @@ def read_stdin_json() -> dict:
         return {}
 
 
+def read_notify_payload(argv: list[str] | None = None) -> dict:
+    """优先读取 Codex 通过 argv[1] 传入的 JSON，回退到 stdin。"""
+    argv = argv if argv is not None else sys.argv
+    if len(argv) >= 2:
+        try:
+            return json.loads(argv[1])
+        except Exception:
+            pass
+    return read_stdin_json()
+
+
 def check_loop_guard(data: dict) -> None:
     """若 stop_hook_active=true，直接退出，防止无限循环。"""
     if data.get("stop_hook_active", False):
@@ -38,15 +64,35 @@ def check_loop_guard(data: dict) -> None:
         sys.exit(0)
 
 
+def truncate_text(value: str, limit: int = 150) -> str:
+    """截断文本，避免摘要过长。"""
+    text = (value or "").strip()
+    if not text:
+        return "（无法获取摘要）"
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…"
+
+
 def extract_summary(data: dict) -> str:
-    """从 last_assistant_message 截取前 150 字作为摘要。"""
-    msg = data.get("last_assistant_message", "")
+    """从不同事件格式里提取摘要。"""
+    msg = (
+        get_value(data, "last_assistant_message")
+        or get_value(data, "message")
+        or get_value(data, "summary")
+        or get_value(data, "text")
+    )
+    if isinstance(msg, dict):
+        msg = (
+            get_value(msg, "content")
+            or get_value(msg, "text")
+            or get_value(msg, "message")
+            or get_value(msg, "title")
+            or ""
+        )
     if not msg:
         return "（无法获取摘要）"
-    summary = msg.strip()[:150]
-    if len(msg.strip()) > 150:
-        summary += "…"
-    return summary
+    return truncate_text(str(msg))
 
 
 def count_turns(transcript_path: str) -> int:
@@ -85,7 +131,114 @@ MODE_LABELS = {
 }
 
 
-def build_payload(project: str, turns: int, summary: str, permission_mode: str) -> dict:
+def find_first_string(data, keys: tuple[str, ...]) -> str:
+    """在常见字段里查找第一个非空字符串。"""
+    if not isinstance(data, dict):
+        return ""
+
+    for key in keys:
+        value = get_value(data, key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item.strip():
+                    return item.strip()
+        if isinstance(value, dict):
+            nested = find_first_string(
+                value,
+                ("content", "text", "message", "summary", "title", "cwd", "path"),
+            )
+            if nested:
+                return nested
+
+    for nested_key in ("metadata", "context", "data", "payload"):
+        nested = get_value(data, nested_key)
+        if isinstance(nested, dict):
+            result = find_first_string(nested, keys)
+            if result:
+                return result
+
+    return ""
+
+
+def find_first_int(data, keys: tuple[str, ...]) -> int:
+    """在常见字段里查找第一个整数。"""
+    if not isinstance(data, dict):
+        return 0
+
+    for key in keys:
+        value = get_value(data, key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+        if isinstance(value, dict):
+            nested = find_first_int(
+                value,
+                ("turn_count", "turns", "user_turns", "conversation_turns"),
+            )
+            if nested:
+                return nested
+
+    for nested_key in ("metadata", "context", "data", "payload"):
+        nested = get_value(data, nested_key)
+        if isinstance(nested, dict):
+            result = find_first_int(nested, keys)
+            if result:
+                return result
+
+    return 0
+
+
+def detect_source(data: dict) -> str:
+    """根据字段特征判断事件来源。"""
+    if (
+        get_value(data, "stop_hook_active") is not None
+        or get_value(data, "transcript_path") is not None
+        or get_value(data, "session_id") is not None
+    ):
+        return "claude"
+    return "codex"
+
+
+def normalize_event(data: dict) -> dict:
+    """把 Claude/Codex 输入统一成内部事件格式。"""
+    source = detect_source(data)
+    cwd = find_first_string(data, ("cwd", "project_path", "workspace", "worktree_root", "path"))
+    transcript_path = find_first_string(data, ("transcript_path", "transcript", "transcript_file"))
+    permission_mode = find_first_string(
+        data,
+        ("permission_mode", "mode", "session_mode"),
+    ) or "default"
+    summary = extract_summary(data)
+    turns = count_turns(transcript_path)
+    if turns == 0:
+        turns = find_first_int(data, ("turn_count", "turns", "user_turns", "conversation_turns"))
+
+    project = os.path.basename(cwd) if cwd else "unknown"
+    assistant_label = "Claude Code" if source == "claude" else "Codex"
+
+    return {
+        "source": source,
+        "assistant_label": assistant_label,
+        "cwd": cwd,
+        "project": project,
+        "summary": summary,
+        "permission_mode": permission_mode,
+        "turns": turns,
+    }
+
+
+def build_payload(
+    assistant_label: str,
+    project: str,
+    turns: int,
+    summary: str,
+    permission_mode: str,
+) -> dict:
     """构造钉钉 Markdown 类型消息 payload。"""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     mode_label = MODE_LABELS.get(permission_mode, "\U0001F527 " + permission_mode)
@@ -109,7 +262,7 @@ def build_payload(project: str, turns: int, summary: str, permission_mode: str) 
         )
 
     text = (
-        f"## {ok} Claude 任务完成啦！\n\n"
+        f"## {ok} {assistant_label} 任务完成啦！\n\n"
         f"{clock} **完成时间**\uff1a{now}\n\n"
         f"{folder} **当前项目**\uff1a`{project}`\n\n"
         f"{joystick} **工作模式**\uff1a{mode_label}\n\n"
@@ -124,7 +277,7 @@ def build_payload(project: str, turns: int, summary: str, permission_mode: str) 
     return {
         "msgtype": "markdown",
         "markdown": {
-            "title": f"{ok} Claude 任务完成",
+            "title": f"{ok} {assistant_label} 任务完成",
             "text": text,
         },
     }
@@ -186,7 +339,7 @@ def send_notification(webhook: str, payload: dict) -> bool:
 
 
 def main() -> None:
-    data = read_stdin_json()
+    data = read_notify_payload()
     check_loop_guard(data)
 
     webhook = os.environ.get("DINGTALK_WEBHOOK", "")
@@ -198,14 +351,17 @@ def main() -> None:
     if secret:
         webhook = sign_webhook(webhook, secret)
 
-    cwd = data.get("cwd", os.getcwd())
-    project = os.path.basename(cwd) if cwd else "unknown"
-    transcript_path = data.get("transcript_path", "")
-    permission_mode = data.get("permission_mode", "default")
+    event = normalize_event(data)
+    if event["project"] == "unknown":
+        event["project"] = os.path.basename(os.getcwd())
 
-    summary = extract_summary(data)
-    turns = count_turns(transcript_path)
-    payload = build_payload(project, turns, summary, permission_mode)
+    payload = build_payload(
+        assistant_label=event["assistant_label"],
+        project=event["project"],
+        turns=event["turns"],
+        summary=event["summary"],
+        permission_mode=event["permission_mode"],
+    )
     send_notification(webhook, payload)
 
     sys.exit(0)
