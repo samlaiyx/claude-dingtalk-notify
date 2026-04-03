@@ -4,6 +4,14 @@
 
 ## Latest Update
 
+`2026-04-03`
+
+- 新增时长过滤功能：只对执行时长 ≥30 秒的任务发送通知
+- 支持通过 `DINGTALK_DURATION_ENABLED` 和 `DINGTALK_MIN_DURATION` 环境变量配置
+- 新增 `Start` hook 支持，记录会话开始时间
+- 自动清理超过 24 小时的旧状态文件
+- 向后兼容，默认关闭时长过滤
+
 `2026-04-01`
 
 - 新增 `Codex CLI notify` 兼容
@@ -116,10 +124,12 @@ install.bat
 
 脚本需要以下环境变量：
 
-| 变量 | 必填 | 说明 |
-|---|---|---|
-| `DINGTALK_WEBHOOK` | ✅ | 钉钉机器人 Webhook URL |
-| `DINGTALK_SECRET` | 可选 | 加签密钥（`SEC` 开头） |
+| 变量 | 必填 | 默认值 | 说明 |
+|---|---|---|---|
+| `DINGTALK_WEBHOOK` | ✅ | - | 钉钉机器人 Webhook URL |
+| `DINGTALK_SECRET` | 可选 | - | 加签密钥（`SEC` 开头） |
+| `DINGTALK_DURATION_ENABLED` | 可选 | `false` | 启用时长过滤（`true`/`false`） |
+| `DINGTALK_MIN_DURATION` | 可选 | `30` | 最小通知时长（秒） |
 
 ### Claude Code
 
@@ -139,6 +149,8 @@ Windows 用户可以直接设置系统级环境变量；Mac / Linux 用户可以
 ## 第四步：配置 Claude Code
 
 编辑 `~/.claude/settings.json`，与现有字段合并：
+
+### 基础配置（所有任务都通知）
 
 ```json
 {
@@ -161,6 +173,53 @@ Windows 用户可以直接设置系统级环境变量；Mac / Linux 用户可以
   }
 }
 ```
+
+### 进阶配置（仅长任务通知，≥30秒）
+
+如果你希望只对执行时长 ≥30 秒的任务发送通知，避免短任务信息轰炸：
+
+```json
+{
+  "env": {
+    "DINGTALK_WEBHOOK": "你的Webhook地址",
+    "DINGTALK_SECRET": "你的加签密钥",
+    "DINGTALK_DURATION_ENABLED": "true",
+    "DINGTALK_MIN_DURATION": "30"
+  },
+  "hooks": {
+    "Start": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/dingtalk_notify.py --track-start",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/dingtalk_notify.py",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**时长过滤说明：**
+- `DINGTALK_DURATION_ENABLED=true`：启用时长过滤
+- `DINGTALK_MIN_DURATION=30`：只通知执行时长 ≥30 秒的任务
+- 需要同时配置 `Start` 和 `Stop` 两个 hook
+- `Start` hook 记录会话开始时间，`Stop` hook 计算时长并决定是否通知
+- 状态文件保存在 `~/.claude/state/dingtalk/<session_id>.json`
+- 自动清理超过 24 小时的旧状态文件
 
 Windows 用户请把 `python3` 换成 Python 绝对路径。
 
@@ -209,6 +268,25 @@ echo '{"session_id":"test","stop_hook_active":false,"transcript_path":"","last_a
 python3 ~/.codex/notify/dingtalk_notify.py '{"type":"agent-turn-complete","cwd":"/your/project","last-assistant-message":"任务完成"}'
 ```
 
+### 时长过滤功能测试
+
+```bash
+# 设置环境变量
+export DINGTALK_DURATION_ENABLED=true
+export DINGTALK_MIN_DURATION=30
+
+# 测试 1: 短任务（<30s）- 应该跳过通知
+echo '{"session_id":"test1"}' | python3 ~/.claude/hooks/dingtalk_notify.py --track-start
+echo '{"session_id":"test1","last_assistant_message":"Quick task"}' | python3 ~/.claude/hooks/dingtalk_notify.py
+# 预期输出: "[dingtalk_notify] 跳过通知: duration_0s_below_threshold_30s"
+
+# 测试 2: 长任务（≥30s）- 应该发送通知
+echo '{"session_id":"test2"}' | python3 ~/.claude/hooks/dingtalk_notify.py --track-start
+sleep 31
+echo '{"session_id":"test2","last_assistant_message":"Long task"}' | python3 ~/.claude/hooks/dingtalk_notify.py
+# 预期输出: "[dingtalk_notify] 发送通知: duration_31s_exceeds_threshold_30s"
+```
+
 输出 `[dingtalk_notify] 发送成功` 即表示安装成功。
 
 ---
@@ -233,9 +311,22 @@ python3 ~/.codex/notify/dingtalk_notify.py '{"type":"agent-turn-complete","cwd":
 
 **Q: 怎么关闭通知？**
 
-- Claude Code：删除 `settings.json` 里的 `hooks.Stop`
+- Claude Code：删除 `settings.json` 里的 `hooks.Stop`（和 `hooks.Start` 如果配置了时长过滤）
 - Codex CLI：删除 `config.toml` 里的 `notify`
 - 或清空 `DINGTALK_WEBHOOK`
+
+**Q: 时长过滤不生效？**
+
+- 确认 `DINGTALK_DURATION_ENABLED=true` 已设置
+- 确认同时配置了 `Start` 和 `Stop` 两个 hook
+- 检查 `~/.claude/state/dingtalk/` 目录是否有状态文件生成
+- 查看日志输出，确认是否显示 `跳过通知` 或 `发送通知` 及原因
+
+**Q: 首次运行时长过滤，为什么还是收到通知？**
+
+- 首次运行没有开始时间记录，会 fail-safe 发送通知
+- 这是正常行为，确保不会因为状态丢失而漏掉重要通知
+- 后续运行会正常根据时长过滤
 
 **Q: 支持其他通知渠道吗？**
 

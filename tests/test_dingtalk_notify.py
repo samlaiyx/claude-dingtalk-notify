@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -104,6 +106,128 @@ class DingtalkNotifyTests(unittest.TestCase):
 
         self.assertEqual(payload["markdown"]["title"], "✅ Codex 任务完成")
         self.assertIn("## ✅ Codex 任务完成啦！", payload["markdown"]["text"])
+
+    def test_get_session_identifier(self):
+        """测试会话标识符提取"""
+        # Claude Code session_id
+        data1 = {"session_id": "claude-session-123"}
+        self.assertEqual(self.notify.get_session_identifier(data1), "claude-session-123")
+
+        # Codex thread_id (underscore)
+        data2 = {"thread_id": "codex-thread-456"}
+        self.assertEqual(self.notify.get_session_identifier(data2), "codex-thread-456")
+
+        # Codex thread-id (hyphen)
+        data3 = {"thread-id": "codex-thread-789"}
+        self.assertEqual(self.notify.get_session_identifier(data3), "codex-thread-789")
+
+        # No identifier
+        data4 = {"other": "value"}
+        self.assertEqual(self.notify.get_session_identifier(data4), "unknown")
+
+    def test_session_duration_tracking(self):
+        """测试会话时长追踪"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 临时修改状态目录
+            session_id = "test-session-duration"
+            source = "claude"
+
+            # 保存开始时间
+            self.notify.save_session_start(session_id, source)
+
+            # 等待 2 秒
+            time.sleep(2)
+
+            # 获取时长
+            duration = self.notify.get_session_duration(session_id, source)
+            self.assertIsNotNone(duration)
+            self.assertGreaterEqual(duration, 2.0)
+            self.assertLess(duration, 3.0)
+
+            # 清理
+            self.notify.cleanup_session_state(session_id, source)
+
+            # 验证清理后无法获取时长
+            duration_after = self.notify.get_session_duration(session_id, source)
+            self.assertIsNone(duration_after)
+
+    def test_should_send_notification_disabled(self):
+        """测试时长过滤未启用时总是发送"""
+        os.environ["DINGTALK_DURATION_ENABLED"] = "false"
+
+        data = {"session_id": "test"}
+        event = {"source": "claude"}
+
+        should_send, reason = self.notify.should_send_notification(data, event)
+        self.assertTrue(should_send)
+        self.assertEqual(reason, "duration_filter_disabled")
+
+    def test_should_send_notification_below_threshold(self):
+        """测试时长低于阈值时跳过通知"""
+        os.environ["DINGTALK_DURATION_ENABLED"] = "true"
+        os.environ["DINGTALK_MIN_DURATION"] = "30"
+
+        session_id = "test-short-session"
+        data = {"session_id": session_id}
+        event = {"source": "claude"}
+
+        # 保存开始时间
+        self.notify.save_session_start(session_id, "claude")
+
+        # 立即检查（时长 ~0s）
+        should_send, reason = self.notify.should_send_notification(data, event)
+        self.assertFalse(should_send)
+        self.assertIn("below_threshold", reason)
+
+        # 清理
+        self.notify.cleanup_session_state(session_id, "claude")
+
+    def test_should_send_notification_above_threshold(self):
+        """测试时长超过阈值时发送通知"""
+        os.environ["DINGTALK_DURATION_ENABLED"] = "true"
+        os.environ["DINGTALK_MIN_DURATION"] = "1"
+
+        session_id = "test-long-session"
+        data = {"session_id": session_id}
+        event = {"source": "claude"}
+
+        # 保存开始时间
+        self.notify.save_session_start(session_id, "claude")
+
+        # 等待 2 秒
+        time.sleep(2)
+
+        # 检查
+        should_send, reason = self.notify.should_send_notification(data, event)
+        self.assertTrue(should_send)
+        self.assertIn("exceeds_threshold", reason)
+
+        # 清理
+        self.notify.cleanup_session_state(session_id, "claude")
+
+    def test_should_send_notification_no_start_time(self):
+        """测试没有开始时间时发送通知（fail-safe）"""
+        os.environ["DINGTALK_DURATION_ENABLED"] = "true"
+
+        session_id = "test-no-start"
+        data = {"session_id": session_id}
+        event = {"source": "claude"}
+
+        # 不保存开始时间
+        should_send, reason = self.notify.should_send_notification(data, event)
+        self.assertTrue(should_send)
+        self.assertEqual(reason, "no_start_time")
+
+    def test_should_send_notification_no_session_id(self):
+        """测试没有会话 ID 时发送通知"""
+        os.environ["DINGTALK_DURATION_ENABLED"] = "true"
+
+        data = {"other": "value"}
+        event = {"source": "claude"}
+
+        should_send, reason = self.notify.should_send_notification(data, event)
+        self.assertTrue(should_send)
+        self.assertEqual(reason, "no_session_id")
 
 
 if __name__ == "__main__":

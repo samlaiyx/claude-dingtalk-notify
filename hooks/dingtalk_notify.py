@@ -35,6 +35,130 @@ def get_value(data: dict, key: str):
     return None
 
 
+def get_session_identifier(data: dict) -> str:
+    """提取唯一会话/线程标识符。"""
+    return (
+        get_value(data, "session_id")
+        or get_value(data, "thread_id")
+        or get_value(data, "thread-id")
+        or "unknown"
+    )
+
+
+def get_state_file_path(session_id: str, source: str) -> str:
+    """获取会话状态文件路径。"""
+    if source == "claude":
+        base = os.path.expanduser("~/.claude/state/dingtalk")
+    else:
+        base = os.path.expanduser("~/.codex/state/dingtalk")
+
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, f"{session_id}.json")
+
+
+def save_session_start(session_id: str, source: str) -> None:
+    """记录会话开始时间。"""
+    state_file = get_state_file_path(session_id, source)
+    state = {
+        "session_id": session_id,
+        "start_time": time.time(),
+        "last_activity": time.time(),
+    }
+    try:
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception as e:
+        sys.stderr.write(f"[dingtalk_notify] 保存开始时间失败: {e}\n")
+
+
+def get_session_duration(session_id: str, source: str) -> float | None:
+    """计算会话时长（秒）。如果没有开始时间则返回 None。"""
+    state_file = get_state_file_path(session_id, source)
+
+    if not os.path.exists(state_file):
+        return None
+
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            state = json.load(f)
+
+        start_time = state.get("start_time")
+        if not start_time:
+            return None
+
+        duration = time.time() - start_time
+        return duration
+    except Exception as e:
+        sys.stderr.write(f"[dingtalk_notify] 读取开始时间失败: {e}\n")
+        return None
+
+
+def cleanup_session_state(session_id: str, source: str) -> None:
+    """通知发送后清理会话状态文件。"""
+    state_file = get_state_file_path(session_id, source)
+    try:
+        if os.path.exists(state_file):
+            os.remove(state_file)
+    except Exception:
+        pass
+
+
+def cleanup_old_state_files(source: str, max_age_hours: int = 24) -> None:
+    """清理超过 max_age_hours 的旧状态文件。"""
+    if source == "claude":
+        base = os.path.expanduser("~/.claude/state/dingtalk")
+    else:
+        base = os.path.expanduser("~/.codex/state/dingtalk")
+
+    if not os.path.exists(base):
+        return
+
+    cutoff = time.time() - (max_age_hours * 3600)
+    try:
+        for filename in os.listdir(base):
+            filepath = os.path.join(base, filename)
+            if os.path.isfile(filepath) and os.path.getmtime(filepath) < cutoff:
+                os.remove(filepath)
+    except Exception:
+        pass
+
+
+def should_send_notification(data: dict, event: dict) -> tuple[bool, str]:
+    """
+    根据时长阈值判断是否应该发送通知。
+    返回 (should_send, reason)。
+    """
+    # 检查是否启用时长过滤
+    duration_enabled = os.environ.get("DINGTALK_DURATION_ENABLED", "false").lower() == "true"
+
+    if not duration_enabled:
+        return (True, "duration_filter_disabled")
+
+    # 获取最小时长阈值
+    try:
+        min_duration = int(os.environ.get("DINGTALK_MIN_DURATION", "30"))
+    except ValueError:
+        min_duration = 30
+
+    # 获取会话标识符
+    session_id = get_session_identifier(data)
+    if session_id == "unknown":
+        return (True, "no_session_id")
+
+    # 计算时长
+    duration = get_session_duration(session_id, event["source"])
+
+    if duration is None:
+        # 没有开始时间记录 - 发送通知（首次运行或状态丢失）
+        return (True, "no_start_time")
+
+    # 检查阈值
+    if duration >= min_duration:
+        return (True, f"duration_{int(duration)}s_exceeds_threshold_{min_duration}s")
+    else:
+        return (False, f"duration_{int(duration)}s_below_threshold_{min_duration}s")
+
+
 def read_stdin_json() -> dict:
     """读取并解析 stdin 传入的 hook JSON。"""
     try:
@@ -339,6 +463,20 @@ def send_notification(webhook: str, payload: dict) -> bool:
 
 
 def main() -> None:
+    # 检查 --track-start 标志
+    if len(sys.argv) >= 2 and sys.argv[1] == "--track-start":
+        # Start hook 模式：记录会话开始时间
+        data = read_notify_payload(sys.argv[2:] if len(sys.argv) > 2 else None)
+        session_id = get_session_identifier(data)
+        source = detect_source(data)
+
+        if session_id != "unknown":
+            save_session_start(session_id, source)
+            print(f"[dingtalk_notify] 会话开始追踪: {session_id}")
+
+        sys.exit(0)
+
+    # 正常通知模式
     data = read_notify_payload()
     check_loop_guard(data)
 
@@ -355,6 +493,19 @@ def main() -> None:
     if event["project"] == "unknown":
         event["project"] = os.path.basename(os.getcwd())
 
+    # 检查时长阈值
+    should_send, reason = should_send_notification(data, event)
+
+    if not should_send:
+        print(f"[dingtalk_notify] 跳过通知: {reason}")
+        # 清理状态文件
+        session_id = get_session_identifier(data)
+        if session_id != "unknown":
+            cleanup_session_state(session_id, event["source"])
+        sys.exit(0)
+
+    print(f"[dingtalk_notify] 发送通知: {reason}")
+
     payload = build_payload(
         assistant_label=event["assistant_label"],
         project=event["project"],
@@ -362,7 +513,17 @@ def main() -> None:
         summary=event["summary"],
         permission_mode=event["permission_mode"],
     )
-    send_notification(webhook, payload)
+
+    success = send_notification(webhook, payload)
+
+    # 通知成功后清理状态文件
+    if success:
+        session_id = get_session_identifier(data)
+        if session_id != "unknown":
+            cleanup_session_state(session_id, event["source"])
+
+    # 定期清理旧状态文件
+    cleanup_old_state_files(event["source"])
 
     sys.exit(0)
 
