@@ -18,6 +18,7 @@ jobs:
       - name: Send DingTalk test message
         shell: bash
         run: |
+          echo 'triggered_at=2026-06-22T02:43:00Z'
           python3 - <<'PY'
           import os, time, hmac, hashlib, base64, urllib.parse, json, urllib.request, sys
 
